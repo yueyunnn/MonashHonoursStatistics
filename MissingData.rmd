@@ -1,276 +1,31 @@
 ---
-title: "Missing Data & Cleaning"
+title: "Missing Data"
 author: "Joshua F. Wiley"
 date: "`r Sys.Date()`"
 output: 
   tufte::tufte_html: 
     toc: true
     number_sections: true
-  tufte::tufte_handout: 
-    toc: true
-    number_sections: true
-  word_document:
-    toc: false
-  
 ---
 
-```{r, echo=FALSE, include=FALSE}
-## note this chunk is NOT required
-library(checkpoint)
-checkpoint("2019-01-25", R.version = "3.5.1",
-           scanForPackages = FALSE)
-```
-
 Download the raw `R` markdown code here
-[https://jwiley.github.io/MonashHonoursStatistics/Data_Missing.rmd](https://jwiley.github.io/MonashHonoursStatistics/Data_Missing.rmd).
+[https://jwiley.github.io/MonashHonoursStatistics/MissingData.rmd](https://jwiley.github.io/MonashHonoursStatistics/MissingData.rmd).
 
 
 ```{r setup}
 options(digits = 2)
 
 ## There are two new packages: (1) mice (2) VIM
-## both are used for missing data. You can try installing
-## by uncommenting the install.packages() code below
+## both are used for missing data.
 
-#install.packages("mice", type = "binary")
-#install.packages("VIM", type = "binary")
-
-## some people report also needing the zip pkg
-# install.packages("zip", type = "binary")
-
-## some people also report type="binary" does not work
-## if that happens to you, try:
-# install.packages("mice")
-# install.packages("VIM")
-
-## once installed, open the packages using the 
-## library() calls below
+## some people have reported also needing the zip pkg
+# install.packages("zip") before the other packages install correctly
 
 library(data.table)
+library(JWileymisc)
 library(mice)
 library(VIM)
 library(ggplot2)
-
-## read in the dataset
-d <- readRDS("aces_daily_sim_processed.RDS")
-
-```
-
-# Data Cleaning
-
-A common data cleaning task is to identify and address extreme values.
-In multilevel / repeated measures data, extreme values may exist at
-the between person level (i.e., a person who is relatively extreme
-compared to other people) or at the within person level (i.e., an
-assessment that is relatively extreme for that person).
-
-## Between Person Cleaning
-
-First we will look at the between person level. To do this, we need to
-create between person variables and then make sure we only have one
-row per person.
-
-```{r}
-
-## make averages
-d[, MeanStress := mean(STRESS, na.rm=TRUE), by = UserID]
-## between person dataset (one row per person)
-d.b <- d[!duplicated(UserID)]
-
-```
-
-Now we can process these between person data as any other dataset. One
-way to look for outliers is using z scores and histograms.
-We can create z scores in `R` using the `scale()` function which can
-scale variables to have mean 0 and standard deviation 1 by default or
-scale to any other values as desired.
-We can see the maximum z score and the graph also suggests that one
-person is a bit extreme with an average stress score above 6.
-
-```{r}
-
-d.b[, ZStress := scale(MeanStress)]
-
-## summary of the data including min and max
-summary(d.b$ZStress)
-
-ggplot(d.b, aes(MeanStress)) +  
-  geom_histogram(bins = 20)
-
-```
-
-One option for extreme values is to winsorize them. Winsorizing
-basically involves setting a cutoff and then setting any scores above
-that cutoff at the cutoff or just slightly above it.
-Sometimes, people use z-scores to determine cut offs. However, these
-are themselves very sensitive to outliers. Percentiles tend to work
-better as they are not influenced by the presence of outliers.
-We can find percentiles in `R` using the `quantile()` function.
-For balance, it is important to winsorize both the top and bottom
-equally. Below we look at the extremes (0th and 100th percentiles),
-1st and 99th percentiles, and median (50th percentile).
-
-```{r} 
-
-quantile(d.b$MeanStress,
-         probs = c(0, .01, .5, .99, 1),
-         na.rm = TRUE)
-
-```
-
-Suppose we wanted to winsorize the top and bottom 1 percent.
-We do it by selecting the extreme rows and altering just those
-values. Remaking the histogram we can see that the most extreme values
-have been pulled in slightly. We can also convert to z-scores again
-using `scale()` now that extreme values have been pulled in and
-summarize. Now the maximum is under 3 as well. Not required, but
-showing the extremes have been reduced.
-
-```{r}
-
-d.b[MeanStress < 0.21, MeanStress := 0.21]
-d.b[MeanStress > 6.31, MeanStress := 6.31]
-
-ggplot(d.b, aes(MeanStress)) +  
-  geom_histogram(bins = 20)
-
-summary(scale(d.b$MeanStress))
-
-```
-
-## Wihin Person Cleaning
-
-Cleaning at the within person level is a bit more complex. First, we
-might create within person z scores. These are made by subtracting
-individuals' own means and dividing by individuals' own standard
-deviations, as different people might be more or less variable.
-Then we can make a summary and histogram. There are some extreme and
-rare values at the tails that we might want to pull in.
-
-```{r}
-
-d[, WZStress := scale(STRESS), by = UserID]
-
-summary(d$WZStress)
-
-ggplot(d, aes(WZStress)) +
-  geom_histogram(bins = 50)
-
-```
-
-Winsorizing at the within level requires different values be applied
-to each person. To do this, we create new variables for each person.
-
-```{r}
-
-d[, LLStress := quantile(STRESS, probs = .05, na.rm = TRUE),
-  by = UserID]
-d[, ULStress := quantile(STRESS, probs = .95, na.rm = TRUE),
-  by = UserID]
-
-```
-
-Now we can select any rows that exceed these values for each person,
-and set to their own person value. In this case, we will be
-winsorizing the top and bottom 5 percent for each person. The reason for
-choosing a higher value is that since each person only has on average
-about 30 observations, the 1st and 99th percentiles will be the
-extremes anyway. 
-Afterward, we must again re-make the z-zscores and check the
-distribution.
-
-```{r}
-
-d[, StressClean := STRESS]
-d[STRESS < LLStress, StressClean := LLStress]
-d[STRESS > ULStress, StressClean := ULStress]
-
-d[, WZStressClean := scale(StressClean), by = UserID]
-
-summary(d$WZStressClean)
-
-ggplot(d, aes(WZStressClean)) +
-  geom_histogram(bins = 50)
-
-```
-
-Even though we checked the between person level first. In general, it
-is better to clean the within person level first, because outliers on
-an individual assessment will bias the average for a person (i.e., the
-between person level).
-
-## Cleaning You Try It (Workbook)
-
-Try to clean the within and between level of Negative Affect. Try
-these steps, as we did above.
-
-- Calculate and plot individual within person z scores for Negative
-  Affect (`NegAff`).
-- Winsorize at the within person level and then re-calculate and plot
-  within person z scores for Negative Affect
-- Calculate average Negative Affect (make sure to use the "clean"
-  version). Create a between person dataset with only one row per
-  person. Examine whether there are between person outliers on
-  negative affect, and if so, winsorize. Then check whether
-  winsorizing at the percentile you chose was enough to remove
-  apparent extreme values.
-  
-```{r trycleaning, error=TRUE}
-
-## within person 
-
-d[,  := scale(   ), by = UserID]
-
-summary(d$   )
-
-ggplot(d, aes(   )) +
-  geom_histogram(bins = 50)
-
-d[,   := quantile(   , probs = .05, na.rm = TRUE),
-  by = UserID]
-d[,    := quantile(   , probs = .95, na.rm = TRUE),
-  by = UserID]
-
-d[, Clean :=   ]
-d[   <   , Clean :=   ]
-d[   >   , Clean :=   ]
-
-d[, WZClean := scale(   ), by = UserID]
-
-summary(d$    )
-
-ggplot(d, aes(    )) +
-  geom_histogram(bins = 50)
-
-
-## between person
-
-## make averages
-d[,     := mean(   , na.rm=TRUE), by = UserID]
-
-## between person dataset (one row per person)
-d.b <- d[!duplicated(UserID)]
-
-d.b[,      := scale(    )]
-
-## summary of the data including min and max
-summary(d.b$   )
-
-ggplot(d.b, aes(   )) +  
-  geom_histogram(bins = 20)
-
-
-quantile(d.b$,
-         probs = c(0, .01, .5, .99, 1),
-         na.rm = TRUE)
-
-d.b[    <   ,     :=   ]
-d.b[    >   ,     :=   ]
-
-ggplot(d.b, aes(    )) +  
-  geom_histogram(bins = 20)
-
-summary(scale(d.b$    ))
 
 ```
 
@@ -291,18 +46,18 @@ Missing data often are classified:
 
 - Missing completely at random (MCAR) when the missingness mechanism
 is completely independent of the estimate of our parameter(s) of
-interest[^mcar].
+interest.
 - Missing at random (MAR) when the missingness mechanism is
 *conditionally* independent of the estimate of our parameter(s) of
-interest[^mar]
+interest
 - Missing not at random (MNAR) when the missingness mechanism is
-associated with the estimate of our parameter(s) of interest[^mnar]
+associated with the estimate of our parameter(s) of interest
 
-[^mcar]: When data are missing completely at random (MCAR), listwise
+**When data are missing completely at random (MCAR)**, listwise
 deletion will yield unbiased estimates of the true parameter(s) if the
 data had not been missing.
 
-[^mar]: When data are missing at random (MAR), 
+**When data are missing at random (MAR)**, 
 it is possible to recover unbiased
 estimates if the right other variables are present. Our lecture
 example is an example of MAR. When people had high stress, we set
@@ -319,7 +74,7 @@ conditioned correctly on, can recover unbiased estimates from the
 data despite missingness. 
 
 
-[^mnar]: When data are missing not at random (MNAR), 
+**When data are missing not at random (MNAR)**, 
 you cannot recover unbiased estimates. 
 A simple example of this would be if less happy people
 were more likely to be missing. So rather than stress driving
@@ -389,7 +144,7 @@ $\hat{Q}$, whether that be a mean, correlation, regression
 coefficient, or any other statistic of interest. With missing data
 addressed using MI, we instead report $\bar{Q}$, which is defined as:
 
-$$\bar{Q} = \frac{1}{m}\sum_{i = 1}^{m}\hat{Q}_{i}$$
+$$ \bar{Q} = \frac{1}{m}\sum_{i = 1}^{m}\hat{Q}_{i} $$
 
 This is simply the average of the $\hat{Q}$ estimates from each
 individual imputed dataset. What is more unique and forms an important
@@ -399,7 +154,7 @@ difference between multiple imputation and other simpler methods
 Let $\hat{V}_{i}$ be the variance estimate (e.g., squared standard
 error) for the $ith$ imputed dataset for $\hat{Q}_{i}$. Then:
 
-$$\bar{V} = \frac{1}{m}\sum_{i = 1}^{m}\hat{V}_{i}$$
+$$ \bar{V} = \frac{1}{m}\sum_{i = 1}^{m}\hat{V}_{i} $$
 
 $\bar{V}$ is the average uncertainty estimate of $\hat{Q}$ across the
 multiply imputed datasets.
@@ -407,7 +162,7 @@ multiply imputed datasets.
 However, there is another source of uncertainty in our estimate of 
 $\bar{Q}$. The between imputed dataset variation, which is:
 
-$$B = \frac{1}{m - 1}\sum_{i = 1}^{m}(\hat{Q}_{i} - \bar{Q})^2$$
+$$ B = \frac{1}{m - 1}\sum_{i = 1}^{m}(\hat{Q}_{i} - \bar{Q})^2 $$
 
 $B$ captures the variance in the estimates, $\hat{Q}$. Because the
 observed, non-missing data never change from one imputed dataset to
@@ -450,31 +205,28 @@ approach: fully conditional specification (FCS) or multiple imputation
 through chained equations (mice) is:
 
 1. Start with a raw dataset with missing data
-2. Fill in the missing data values with **initial** estimates[^initial].
-3. For each variable that has missing data, build a prediction model
-from other variables[^predictionmodel].
-4. Use the model to predict the missing data[^fillmissing].
-5. Repeat steps 2 and 3 until the predicted complete dataset does not
-vary within some tolerance from one iteration to the next, indicating
-convergence.
-
-[^initial]: The first "fill in" estimates are generally fast and easy
+2. Fill in the missing data values with **initial** estimates. 
+*The first "fill in" estimates are generally fast and easy
 to generate. For example, fill in missing using the median for each
-variable or even random numbers within the observed data range.
-
-[^predictionmodel]: Typically, all other variables in the dataset
+variable or even random numbers within the observed data range.*
+3. For each variable that has missing data, build a prediction model
+from other variables.
+*Typically, all other variables in the dataset
 being imputed are used in the prediction model, but it is possible to
 use a subset. The most common case is to use Generalized Linear Models
 (GLMs) as the prediction model, so linear regression for continuous
 outcomes, logistic regression for binary outcomes, etc. However, any
 prediction model can be used, including more complex methods such as
-machine learning.
-
-[^fillmissing]: At this step, the average / best prediction from the
+machine learning.*
+4. Use the model to predict the missing data.
+*At this step, the average / best prediction from the
 model is used without capturing uncertainty. That is because this is
 the dataset used to build the "final" model for actually imputing the
 missing data. While we want uncertainty in our imputations, we do not
-want the uncertainty in the data used to build the imputation model.
+want the uncertainty in the data used to build the imputation model.*
+5. Repeat steps 2 and 3 until the predicted complete dataset does not
+vary within some tolerance from one iteration to the next, indicating
+convergence.
 
 These steps may be easier to understand with a concrete example. Here
 we setup a small dataset with age and inflammation.
@@ -486,7 +238,7 @@ x$Inflammation <-  rnorm(10, x$Age/10, sd = .2)
 x$Missing <- as.logical(rep(FALSE:TRUE, c(9, 1)))
 
 scatterp <- ggplot(x, aes(Age, Inflammation)) +
-    stat_smooth(method = "lm", se=FALSE) + 
+    stat_smooth(method = "lm", formula = y ~ x, se=FALSE) + 
     geom_point(aes(colour = Missing, size = Missing)) +
     theme_classic() + theme(legend.position = c(.8, .2))
 
@@ -501,26 +253,26 @@ y$Inflammation[y$Missing] <- NA
 Here is a for loop that iterates through filling in missing values,
 first using the median and then based on linear regression.
 The graphs following show the scatter plots with the filled in missing
-value at the first iteration and then later iterations[^iterconverge].
+value at the first iteration and then later iterations.
 Watch how the imputed missing value changes from one iteration to the
 next and how with later iterations, the amount of change gets
 smaller and smaller.
 
-[^iterconverge]: The goal behind iterating is to build a prediction
-    model to impute the missing data. However, building that model in
-    the first place is difficult when the data on which the model
-    would be built are (partially) missing. To deal with this, we
-    iterate between predicting the missing data and (re)building a
-    model on the new dataset, now that missingness has been imputed.
-	Multiple iterations are required because every time we generate new
-    predictions to fill in the missing data, the dataset on which the
-    prediction model was built changes, so we must rebuild the
-    prediction model using the latest iteration of the dataset. This
-    process is repeated until the change from one iteration to the
-    next is very small. At that point, we say the results have
-    **converged**.
+The goal behind iterating is to build a prediction
+model to impute the missing data. However, building that model in
+the first place is difficult when the data on which the model
+would be built are (partially) missing. To deal with this, we
+iterate between predicting the missing data and (re)building a
+model on the new dataset, now that missingness has been imputed.
+Multiple iterations are required because every time we generate new
+predictions to fill in the missing data, the dataset on which the
+prediction model was built changes, so we must rebuild the
+prediction model using the latest iteration of the dataset. This
+process is repeated until the change from one iteration to the
+next is very small. At that point, we say the results have
+**converged**.
 
-```{r}
+```{r, fig.show = "animate", animation.hook="gifski", warning = FALSE, message = FALSE}
 
 ## create an imputed dataset
 yimp <- y
@@ -536,12 +288,11 @@ for (i in 1:10) {
   }
   yimp$Inflammation[yimp$Missing == TRUE] <- imps[i]
   p[[i]] <- scatterp %+% yimp + ggtitle(sprintf("Iteration = %d", i))
+  if (i > 4) {
+    p[[i]] <- p[[i]] + coord_cartesian(xlim = c(55, 66), ylim = c(5.4, 7), expand=FALSE)
+  }
+  print(p[[i]])
 }
-
-print(p[[1]])
-print(p[[2]])
-print(p[[3]])
-print(p[[4]])
 
 ```
 
@@ -560,10 +311,10 @@ print(imps, digits = 5)
 ```
 
 This gets us through Steps 2 to 5. The final step is to use those
-final models to impute missing data[^imputemissing],
+final models to impute missing data,
 generating the desired number of imputed datasets (e.g., 100).
 
-[^imputemissing]: This can be a rather complex step. Generating the
+This can be a rather complex step. Generating the
 average prediction from, say, a linear regression is straight
 forward. However, that average prediction does not take into account
 that the linear regression model is uncertain in its prediction. To
@@ -638,7 +389,8 @@ datasets:
 ```{r}
 
 ## read in the dataset
-d <- readRDS("aces_daily_sim_processed.RDS")
+data(aces_daily)
+d <- as.data.table(aces_daily)
 
 ## between person data, no missing
 davg <- na.omit(d[, .(
@@ -653,11 +405,11 @@ davg <- na.omit(d[, .(
 davgmiss <- copy(davg)
 davgmiss[STRESS < 1, NegAff := NA]
 davgmiss[STRESS > 4, PosAff := NA]
-## random missingness on age
+## random missingness on age and Female
 set.seed(1234)
-davgmiss[, Age := ifelse(rbinom(
-             .N, size = 1, prob = .1) == 1,
-             NA, Age)]
+davgmiss[rbinom(.N, size = 1, prob = .1) == 1, Age := NA_real_]
+davgmiss[rbinom(.N, size = 1, prob = .05) == 1, Female := NA]
+
 ## drop unneeded variables to make analysis easier
 davgmiss[, UserID := NULL]
 
@@ -668,19 +420,19 @@ Before doing any imputation, it is a good idea to examine data. The
 data. We start by looking at the amount missing on each variable and
 the patterns of missing data using the `aggr()` function. This shows
 us that just over half of cases have complete data on all 
-variables[^aggrplot].
+variables.
 
-[^aggrplot]: The left hand side of this missing data plot shows the 
+The left hand side of this missing data plot shows the 
 proportion of missing data on each individual variable. Variables
 where the bars have no height are variables with no (or very nearly
 no) missing data. Variables with higher bars have a greater proportion
 of missing observations on that variable. 
 The right hand side shows different patterns of missing data. Blue
-indicates present data. Red indicates missing data. About 56% of
+indicates present data. Red indicates missing data. About 52% of
 people have all variables present. The next most common pattern is to
 have all variables present but be missing just negative affect, with
-about 21% of people. The next most common pattern is having all
-variable but to be missing positive affect, with about 14% of people.
+about 17% of people. The next most common pattern is having all
+variable but to be missing positive affect, with about 13% of people.
 Identifying the patterns of missing data can be useful for identifying
 whether there is enough overlap of relevant variables to predict
 missingness and to identify if there are any unexpected patterns that
@@ -697,9 +449,9 @@ A margin plot is an augmented scatter plot that in the margins shows
 the values on one variable when missing on the other along with a
 boxplot. This shows us that when negative affect is missing, stress
 scores are all low between 0 and 1. There are no missing stress scores
-so there is only one boxplot for negative affect[^marginplot].
+so there is only one boxplot for negative affect.
 
-[^marginplot]: The margin plot starts with a scatter plot. Blue dots
+The margin plot starts with a scatter plot. Blue dots
 are observed data. Red dots are imputed data. The values of these can
 help to see if imputations fall outside the range of observed data,
 fit with the rest of the trend from the observed data or identify any
@@ -721,9 +473,9 @@ marginplot(davgmiss[,.(STRESS, NegAff)])
 
 We can test whether levels of one variable differ by missing on
 another variable. This is often done with simple analyses, like
-t-tests or chi-square tests[^missingtests].
+t-tests or chi-square tests.
 
-[^missingtests]: These tests tell us whether values on one variable
+These tests tell us whether values on one variable
 differ systematically when another variable is missing or present. For
 example, do mean stress levels differ between people who are missing
 negative affect versus people who are not missing negative affect?
@@ -783,15 +535,15 @@ mi.1 <- mice(
   seed = 1234, printFlag = FALSE)
 
 ## plot convergence diagnostics
-plot(mi.1, PosAff + NegAff + Age ~ .it | .ms)
+plot(mi.1, PosAff + NegAff + Female ~ .it | .ms)
 
 ```
 
 If we are not convinced the model converged, re-run with more
 iterations. Convergence is when there is no clear systematic change
-with additional iterations[^convergence].
+with additional iterations.
 
-[^convergence]: The convergence diagnostics show estimated values of
+The convergence diagnostics show estimated values of
 descriptive statistics on some of the variables that have missing
 data (note, if no missing data are present on a variable, results will
 be same for each iteration so the plot is not needed and will fail). 
@@ -813,14 +565,14 @@ mi.1 <- mice.mids(
 
 
 ## plot convergence diagnostics
-plot(mi.1, PosAff + NegAff + Age ~ .it | .ms)
+plot(mi.1, PosAff + NegAff + Female ~ .it | .ms)
 
 ```
 
 Once we are satisfied with convergence, we can plot the imputed data
-versus observed data. Imputed data are in red[^midiagnostics].
+versus observed data. Imputed data are in red.
 
-[^midiagnostics]: These diagnostic plots do not necessarily tell you
+These diagnostic plots do not necessarily tell you
 whether the imputation is "right" or "wrong". They show in blue the
 observed density plots and in blue the observed data scatter
 plots. The red lines and points represent the distributions from the
@@ -850,23 +602,25 @@ datasets. It means that the analysis is automatically run on each
 imputed dataset separately. If we view the results, we end up with a
 bunch of separate linear regressions.
 To pool the results from the individual regressions, we use the
-`pool()` function[^pooloutput].
+`pool()` function.
 
-[^pooloutput]: The pooled output has several pieces:</br>
-**estimate**: the pooled, average regression coefficients;</br>
-**ubar**: the average variance (based on the squared standard errors)
-  associated with sampling variation, we called it $\bar{V}$;</br>
-**b**: the between imputation variance; </br>
-**t**: the total variance incorporating sampling variation, between
-  imputation variance, and simulation error;</br>
-**dfcom**: the degrees of freedom for the complete data analysis (i.e.,
-  if there had not been missing data);</br>
-**df**: the estimated residual degrees of freedom for the model, taking
-  into account missingness;</br>
-**riv**: the relative increase variance due to missing data;</br>
-**lambda** or $\lambda$: the proportion of total variance due to
-  missing data, that is: $\lambda = \frac{B + B/m}{T}$;</br>
-**fmi**: the fraction of missing information
+The pooled output has several pieces:
+
+- **estimate**: the pooled, average regression coefficients;
+- **ubar**: the average variance (based on the squared standard errors)
+  associated with sampling variation, we called it $\bar{V}$;
+- **b**: the between imputation variance;
+- **t**: the total variance incorporating sampling variation, between
+  imputation variance, and simulation error;
+- **dfcom**: the degrees of freedom for the complete data analysis (i.e.,
+  if there had not been missing data);
+- **df**: the estimated residual degrees of freedom for the model, taking
+  into account missingness;
+- **riv**: the relative increase variance due to missing data;
+- **lambda** or $\lambda$: the proportion of total variance due to
+  missing data, that is: $\lambda = \frac{B + B/m}{T}$;
+- **fmi**: the fraction of missing information
+
 
 ```{r}
 
@@ -879,22 +633,23 @@ pool(mi.reg)
 ```
 
 We can also summarise the pooled results with confidence intervals
-using the `summary()` function on the pooled results[^summaryoutput].
+using the `summary()` function on the pooled results.
 Finally, we can get a pooled $R^2$ value using the
 `pool.r.squared()` function on the analyses.
 
-[^summaryoutput]: The summary output includes standard regression
-output in this case.</br>
-**estimate**: the pooled, average regression coefficients;</br>
-**std.error**: the standard error of the estimates incorporating all
-  three sources of MI error, specifically: $se = \sqrt{T}$;</br>
-**statistic**: $\frac{estimate}{std.error}$;</br>
-**df**: the estimated degrees of freedom incorporating uncertainty due
-  to missing data, combined with the statistic to calculate p-values;</br>
-**p.value**: the p-value, the probability of obtaining the estimate or
-  larger in the sample given that the true population value was zero.</br>
-**2.5%**: the lower limit of the 95% confidence interval;</br>
-**97.5%**: the upper limit of the 95% confidence interval.
+The summary output includes standard regression
+output in this case.
+
+- **estimate**: the pooled, average regression coefficients;
+- **std.error**: the standard error of the estimates incorporating all
+  three sources of MI error, specifically: $se = \sqrt{T}$;
+- **statistic**: $\frac{estimate}{std.error}$;
+- **df**: the estimated degrees of freedom incorporating uncertainty due
+  to missing data, combined with the statistic to calculate p-values;
+- **p.value**: the p-value, the probability of obtaining the estimate or
+  larger in the sample given that the true population value was zero.
+- **2.5%**: the lower limit of the 95% confidence interval;
+- **97.5%**: the upper limit of the 95% confidence interval.
 
 ```{r}
 
@@ -906,8 +661,26 @@ pool.r.squared(mi.reg)
 ```
 
 In general, you can use any analysis you want with multiple
-imputation, replacing `lm()` with another function, including `lmer()`
-as we've worked with this semester.
+imputation, replacing `lm()` with another function, including `glm()`
+and `lmer()`.
+
+Here is an example looking at a logistic regression (albeit a rather
+silly one) predicting Female from negative affect and age.
+We can select the coefficients and confidence intervals and
+exponentiate them to get the odds ratios.
+
+```{r}
+
+mi.reg2 <- with(mi.1, glm(Female ~ NegAff + Age, family = binomial()))
+
+m.mireg2 <- summary(pool(mi.reg2), conf.int=TRUE)
+print(m.mireg2)
+
+## odds ratios
+exp(m.mireg2[, c("estimate", "2.5 %", "97.5 %")])
+
+```
+
 
 ## Multiple Imputation Comparison
 
@@ -926,9 +699,9 @@ The graph that follows shows that compared to the true data, the
 multiply imputed results have larger confidence intervals slightly. In
 this case, the multiply imputed results are closer to the truth in the
 absolute estimates (dots in the graph) than are the estimates from the
-complete case analysis[^truthnote].
+complete case analysis.
 
-[^truthnote]: In general we do not have the true estimates. In this
+**In general we do not have the true estimates**. In this
 example, we have the true estimates because we created the missing
 data. In real world settings, all we could do is compare the complete
 case analysis (i.e., using listwise deletion, labelled "CC") with the multiple
@@ -956,3 +729,20 @@ ggplot(res.compare, aes(factor(""),
   facet_wrap(~Param, scales = "free")
 
 ```
+
+
+# Summary Table
+
+Here is a little summary of some of the functions used in this
+topic. 
+
+| Function       | What it does                                 |
+|----------------|----------------------------------------------|
+| `aggr()`     | Create a plot of missingness by variable and patterns of mising data for an entire dataset |
+| `marginplot()` | Create a scatter plot of the non missing data between two continuous variables with the margins showing where missing data are | 
+| `mice()` | Main worker function for multiple imputation through chained equations in `R`. Takes a dataset, the number of imputations and number of iterations as a minimum. |
+| `mice.mids()` | A way to add more iterations to an existing multiply imputed object from `mice()` |
+| `with()` | Function used to run models with a multiply imputed dataset. | 
+| `pool()` | Pool / aggregate results run on multiply imputed data. | 
+| `pool.r.squared()` | Calculate pooled $R^2$ value (only for `lm()` models) in multiply imputed analyses.|
+
